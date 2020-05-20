@@ -127,20 +127,16 @@ def hierarchical_dataset(root, opt, select_data='/'):
 
 
 class LmdbDataset(Dataset):
-
     def __init__(self, root, opt):
-
         self.root = root
         self.opt = opt
         self.env = lmdb.open(root, max_readers=32, readonly=True, lock=False, readahead=False, meminit=False)
         if not self.env:
             print('cannot create lmdb from %s' % (root))
             sys.exit(0)
-
         with self.env.begin(write=False) as txn:
             nSamples = int(txn.get('num-samples'.encode()))
             self.nSamples = nSamples
-
             if self.opt.data_filtering_off:
                 # for fast check or benchmark evaluation with no filtering
                 self.filtered_index_list = [index + 1 for index in range(self.nSamples)]

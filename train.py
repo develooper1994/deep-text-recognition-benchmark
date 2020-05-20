@@ -12,7 +12,7 @@ import torch.optim as optim
 import torch.utils.data
 import numpy as np
 
-from utils import CTCLabelConverter, AttnLabelConverter, Averager
+from utils import CTCLabelConverter, AttnLabelConverter, Averager, model_configuration
 from dataset import hierarchical_dataset, AlignCollate, Batch_Balanced_Dataset
 from model import Model
 from test import validation
@@ -21,15 +21,167 @@ device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 def train(opt):
     """ dataset preparation """
+    train_dataset, valid_loader = dataset_preparation(opt)
+
+    """ model configuration """
+    converter, model = model_configuration(opt)
+
+    # weight initialization
+    weight_initialization(model)
+
+    # set data parallel for multi-GPU
+    model = set_data_parallel(model, opt)
+
+    """ setup loss """
+    criterion = setup_loss(opt)
+    # loss averager
+    loss_avg = Averager()
+
+    # filter that only require gradient decent
+    filtered_parameters = filter(model)
+
+    # setup optimizer
+    optimizer = setup_optimizer(filtered_parameters, opt)
+
+    """ final options """
+    # print(opt)
+    final_options(opt)
+
+    """ start training """
+    best_accuracy, best_norm_ED, i, start_time = start_training(opt)
+
+    # Train all epochs
+    train_all_epochs(best_accuracy, best_norm_ED, converter, criterion, i, loss_avg, model, opt, optimizer, start_time,
+                     train_dataset, valid_loader)
+
+
+def train_all_epochs(best_accuracy, best_norm_ED, converter, criterion, i, loss_avg, model, opt, optimizer, start_time,
+                     train_dataset, valid_loader):
+    while True:
+        # train part
+        train_one_epoch_part(converter, criterion, loss_avg, model, opt, optimizer, train_dataset)
+
+        # validation part
+        validation_part(best_accuracy, best_norm_ED, converter, criterion, i, loss_avg, model, opt, start_time,
+                        valid_loader)
+
+        # save model per 1e+5 iter.
+        i = save_model_per_iter(i, model, opt)
+
+
+def save_model_per_iter(i, model, opt):
+    if (i + 1) % 1e+5 == 0:
+        torch.save(
+            model.state_dict(), f'./saved_models/{opt.experiment_name}/iter_{i + 1}.pth')
+    if i == opt.num_iter:
+        print('end the training')
+        sys.exit()
+    i += 1
+    return i
+
+
+def validation_part(best_accuracy, best_norm_ED, converter, criterion, i, loss_avg, model, opt, start_time,
+                    valid_loader):
+    if i % opt.valInterval == 0:
+        elapsed_time = time.time() - start_time
+        # for log
+        with open(f'./saved_models/{opt.experiment_name}/log_train.txt', 'a') as log:
+            model.eval()
+            with torch.no_grad():
+                valid_loss, current_accuracy, current_norm_ED, preds, confidence_score, labels, infer_time, length_of_data = validation(
+                    model, criterion, valid_loader, converter, opt)
+            model.train()
+
+            # training loss and validation loss
+            loss_log = f'[{i}/{opt.num_iter}] Train loss: {loss_avg.val():0.5f}, Valid loss: {valid_loss:0.5f}, Elapsed_time: {elapsed_time:0.5f}'
+            loss_avg.reset()
+
+            current_model_log = f'{"Current_accuracy":17s}: {current_accuracy:0.3f}, {"Current_norm_ED":17s}: {current_norm_ED:0.2f}'
+
+            # keep best accuracy model (on valid dataset)
+            if current_accuracy > best_accuracy:
+                best_accuracy = current_accuracy
+                torch.save(model.state_dict(), f'./saved_models/{opt.experiment_name}/best_accuracy.pth')
+            if current_norm_ED > best_norm_ED:
+                best_norm_ED = current_norm_ED
+                torch.save(model.state_dict(), f'./saved_models/{opt.experiment_name}/best_norm_ED.pth')
+            best_model_log = f'{"Best_accuracy":17s}: {best_accuracy:0.3f}, {"Best_norm_ED":17s}: {best_norm_ED:0.2f}'
+
+            loss_model_log = f'{loss_log}\n{current_model_log}\n{best_model_log}'
+            print(loss_model_log)
+            log.write(loss_model_log + '\n')
+
+            # show some predicted results
+            dashed_line = '-' * 80
+            head = f'{"Ground Truth":25s} | {"Prediction":25s} | Confidence Score & T/F'
+            predicted_result_log = f'{dashed_line}\n{head}\n{dashed_line}\n'
+            for gt, pred, confidence in zip(labels[:5], preds[:5], confidence_score[:5]):
+                if 'Attn' in opt.Prediction:
+                    gt = gt[:gt.find('[s]')]
+                    pred = pred[:pred.find('[s]')]
+
+                predicted_result_log += f'{gt:25s} | {pred:25s} | {confidence:0.4f}\t{str(pred == gt)}\n'
+            predicted_result_log += f'{dashed_line}'
+            print(predicted_result_log)
+            log.write(predicted_result_log + '\n')
+
+
+def train_one_epoch_part(converter, criterion, loss_avg, model, opt, optimizer, train_dataset):
+    image_tensors, labels = train_dataset.get_batch()
+    image = image_tensors.to(device)
+    text, length = converter.encode(labels, batch_max_length=opt.batch_max_length)
+    batch_size = image.size(0)
+    if 'CTC' in opt.Prediction:
+        preds = model(image, text).log_softmax(2)
+        preds_size = torch.IntTensor([preds.size(1)] * batch_size)
+        preds = preds.permute(1, 0, 2)
+
+        # (ctc_a) For PyTorch 1.2.0 and 1.3.0. To avoid ctc_loss issue, disabled cudnn for the computation of the
+        # ctc_loss https://github.com/jpuigcerver/PyLaia/issues/16
+        torch.backends.cudnn.enabled = False
+        cost = criterion(preds, text.to(device), preds_size.to(device), length.to(device))
+        torch.backends.cudnn.enabled = True
+
+        # # (ctc_b) To reproduce our pretrained model / paper, use our previous code (below code) instead of (
+        # ctc_a). # With PyTorch 1.2.0, the below code occurs NAN, so you may use PyTorch 1.1.0. # Thus,
+        # the result of CTCLoss is different in PyTorch 1.1.0 and PyTorch 1.2.0. # See
+        # https://github.com/clovaai/deep-text-recognition-benchmark/issues/56#issuecomment-526490707 cost =
+        # criterion(preds, text, preds_size, length)
+
+    else:
+        preds = model(image, text[:, :-1])  # align with Attention.forward
+        target = text[:, 1:]  # without [GO] Symbol
+        cost = criterion(preds.view(-1, preds.shape[-1]), target.contiguous().view(-1))
+    model.zero_grad()
+    cost.backward()
+    torch.nn.utils.clip_grad_norm_(model.parameters(), opt.grad_clip)  # gradient clipping with 5 (Default)
+    optimizer.step()
+    loss_avg.add(cost)
+
+
+def start_training(opt):
+    start_iter = 0
+    if opt.saved_model != '':
+        try:
+            start_iter = int(opt.saved_model.split('_')[-1].split('.')[0])
+            print(f'continue to train, start_iter: {start_iter}')
+        except:
+            pass
+    start_time = time.time()
+    best_accuracy = -1
+    best_norm_ED = -1
+    i = start_iter
+    return best_accuracy, best_norm_ED, i, start_time
+
+
+def dataset_preparation(opt):
     if not opt.data_filtering_off:
         print('Filtering the images containing characters which are not in opt.character')
         print('Filtering the images whose label is longer than opt.batch_max_length')
         # see https://github.com/clovaai/deep-text-recognition-benchmark/blob/6593928855fb7abb999a99f428b3e4477d4ae356/dataset.py#L130
-
     opt.select_data = opt.select_data.split('-')
     opt.batch_ratio = opt.batch_ratio.split('-')
     train_dataset = Batch_Balanced_Dataset(opt)
-
     log = open(f'./saved_models/{opt.experiment_name}/log_dataset.txt', 'a')
     AlignCollate_valid = AlignCollate(imgH=opt.imgH, imgW=opt.imgW, keep_ratio_with_pad=opt.PAD)
     valid_dataset, valid_dataset_log = hierarchical_dataset(root=opt.valid_data, opt=opt)
@@ -42,22 +194,64 @@ def train(opt):
     print('-' * 80)
     log.write('-' * 80 + '\n')
     log.close()
-    
-    """ model configuration """
-    if 'CTC' in opt.Prediction:
-        converter = CTCLabelConverter(opt.character)
+    return train_dataset, valid_loader
+
+
+def final_options(opt):
+    with open(f'./saved_models/{opt.experiment_name}/opt.txt', 'a') as opt_file:
+        opt_log = '------------ Options -------------\n'
+        args = vars(opt)
+        for k, v in args.items():
+            opt_log += f'{str(k)}: {str(v)}\n'
+        opt_log += '---------------------------------------\n'
+        print(opt_log)
+        opt_file.write(opt_log)
+
+
+def setup_optimizer(filtered_parameters, opt):
+    if opt.adam:
+        optimizer = optim.Adam(filtered_parameters, lr=opt.lr, betas=(opt.beta1, 0.999))
     else:
-        converter = AttnLabelConverter(opt.character)
-    opt.num_class = len(converter.character)
+        optimizer = optim.Adadelta(filtered_parameters, lr=opt.lr, rho=opt.rho, eps=opt.eps)
+    print("Optimizer:")
+    print(optimizer)
+    return optimizer
 
-    if opt.rgb:
-        opt.input_channel = 3
-    model = Model(opt)
-    print('model input parameters', opt.imgH, opt.imgW, opt.num_fiducial, opt.input_channel, opt.output_channel,
-          opt.hidden_size, opt.num_class, opt.batch_max_length, opt.Transformation, opt.FeatureExtraction,
-          opt.SequenceModeling, opt.Prediction)
 
-    # weight initialization
+def filter(model):
+    filtered_parameters = []
+    params_num = []
+    for p in filter(lambda p: p.requires_grad, model.parameters()):
+        filtered_parameters.append(p)
+        params_num.append(np.prod(p.size()))
+    print('Trainable params num : ', sum(params_num))
+    # [print(name, p.numel()) for name, p in filter(lambda p: p[1].requires_grad, model.named_parameters())]
+    return filtered_parameters
+
+
+def set_data_parallel(model, opt):
+    model = torch.nn.DataParallel(model).to(device)
+    model.train()
+    if opt.saved_model != '':
+        print(f'loading pretrained model from {opt.saved_model}')
+        if opt.FT:
+            model.load_state_dict(torch.load(opt.saved_model), strict=False)
+        else:
+            model.load_state_dict(torch.load(opt.saved_model))
+    print("Model:")
+    print(model)
+    return model
+
+
+def setup_loss(opt):
+    if 'CTC' in opt.Prediction:
+        criterion = torch.nn.CTCLoss(zero_infinity=True).to(device)
+    else:
+        criterion = torch.nn.CrossEntropyLoss(ignore_index=0).to(device)  # ignore [GO] token = ignore index 0
+    return criterion
+
+
+def weight_initialization(model):
     for name, param in model.named_parameters():
         if 'localization_fc2' in name:
             print(f'Skip {name} as it is already initialized')
@@ -71,158 +265,6 @@ def train(opt):
             if 'weight' in name:
                 param.data.fill_(1)
             continue
-
-    # data parallel for multi-GPU
-    model = torch.nn.DataParallel(model).to(device)
-    model.train()
-    if opt.saved_model != '':
-        print(f'loading pretrained model from {opt.saved_model}')
-        if opt.FT:
-            model.load_state_dict(torch.load(opt.saved_model), strict=False)
-        else:
-            model.load_state_dict(torch.load(opt.saved_model))
-    print("Model:")
-    print(model)
-
-    """ setup loss """
-    if 'CTC' in opt.Prediction:
-        criterion = torch.nn.CTCLoss(zero_infinity=True).to(device)
-    else:
-        criterion = torch.nn.CrossEntropyLoss(ignore_index=0).to(device)  # ignore [GO] token = ignore index 0
-    # loss averager
-    loss_avg = Averager()
-
-    # filter that only require gradient decent
-    filtered_parameters = []
-    params_num = []
-    for p in filter(lambda p: p.requires_grad, model.parameters()):
-        filtered_parameters.append(p)
-        params_num.append(np.prod(p.size()))
-    print('Trainable params num : ', sum(params_num))
-    # [print(name, p.numel()) for name, p in filter(lambda p: p[1].requires_grad, model.named_parameters())]
-
-    # setup optimizer
-    if opt.adam:
-        optimizer = optim.Adam(filtered_parameters, lr=opt.lr, betas=(opt.beta1, 0.999))
-    else:
-        optimizer = optim.Adadelta(filtered_parameters, lr=opt.lr, rho=opt.rho, eps=opt.eps)
-    print("Optimizer:")
-    print(optimizer)
-
-    """ final options """
-    # print(opt)
-    with open(f'./saved_models/{opt.experiment_name}/opt.txt', 'a') as opt_file:
-        opt_log = '------------ Options -------------\n'
-        args = vars(opt)
-        for k, v in args.items():
-            opt_log += f'{str(k)}: {str(v)}\n'
-        opt_log += '---------------------------------------\n'
-        print(opt_log)
-        opt_file.write(opt_log)
-
-    """ start training """
-    start_iter = 0
-    if opt.saved_model != '':
-        try:
-            start_iter = int(opt.saved_model.split('_')[-1].split('.')[0])
-            print(f'continue to train, start_iter: {start_iter}')
-        except:
-            pass
-
-    start_time = time.time()
-    best_accuracy = -1
-    best_norm_ED = -1
-    i = start_iter
-
-    while(True):
-        # train part
-        image_tensors, labels = train_dataset.get_batch()
-        image = image_tensors.to(device)
-        text, length = converter.encode(labels, batch_max_length=opt.batch_max_length)
-        batch_size = image.size(0)
-
-        if 'CTC' in opt.Prediction:
-            preds = model(image, text).log_softmax(2)
-            preds_size = torch.IntTensor([preds.size(1)] * batch_size)
-            preds = preds.permute(1, 0, 2)
-
-            # (ctc_a) For PyTorch 1.2.0 and 1.3.0. To avoid ctc_loss issue, disabled cudnn for the computation of the ctc_loss
-            # https://github.com/jpuigcerver/PyLaia/issues/16
-            torch.backends.cudnn.enabled = False
-            cost = criterion(preds, text.to(device), preds_size.to(device), length.to(device))
-            torch.backends.cudnn.enabled = True
-
-            # # (ctc_b) To reproduce our pretrained model / paper, use our previous code (below code) instead of (ctc_a).
-            # # With PyTorch 1.2.0, the below code occurs NAN, so you may use PyTorch 1.1.0.
-            # # Thus, the result of CTCLoss is different in PyTorch 1.1.0 and PyTorch 1.2.0.
-            # # See https://github.com/clovaai/deep-text-recognition-benchmark/issues/56#issuecomment-526490707
-            # cost = criterion(preds, text, preds_size, length)
-
-        else:
-            preds = model(image, text[:, :-1])  # align with Attention.forward
-            target = text[:, 1:]  # without [GO] Symbol
-            cost = criterion(preds.view(-1, preds.shape[-1]), target.contiguous().view(-1))
-
-        model.zero_grad()
-        cost.backward()
-        torch.nn.utils.clip_grad_norm_(model.parameters(), opt.grad_clip)  # gradient clipping with 5 (Default)
-        optimizer.step()
-
-        loss_avg.add(cost)
-
-        # validation part
-        if i % opt.valInterval == 0:
-            elapsed_time = time.time() - start_time
-            # for log
-            with open(f'./saved_models/{opt.experiment_name}/log_train.txt', 'a') as log:
-                model.eval()
-                with torch.no_grad():
-                    valid_loss, current_accuracy, current_norm_ED, preds, confidence_score, labels, infer_time, length_of_data = validation(
-                        model, criterion, valid_loader, converter, opt)
-                model.train()
-
-                # training loss and validation loss
-                loss_log = f'[{i}/{opt.num_iter}] Train loss: {loss_avg.val():0.5f}, Valid loss: {valid_loss:0.5f}, Elapsed_time: {elapsed_time:0.5f}'
-                loss_avg.reset()
-
-                current_model_log = f'{"Current_accuracy":17s}: {current_accuracy:0.3f}, {"Current_norm_ED":17s}: {current_norm_ED:0.2f}'
-
-                # keep best accuracy model (on valid dataset)
-                if current_accuracy > best_accuracy:
-                    best_accuracy = current_accuracy
-                    torch.save(model.state_dict(), f'./saved_models/{opt.experiment_name}/best_accuracy.pth')
-                if current_norm_ED > best_norm_ED:
-                    best_norm_ED = current_norm_ED
-                    torch.save(model.state_dict(), f'./saved_models/{opt.experiment_name}/best_norm_ED.pth')
-                best_model_log = f'{"Best_accuracy":17s}: {best_accuracy:0.3f}, {"Best_norm_ED":17s}: {best_norm_ED:0.2f}'
-
-                loss_model_log = f'{loss_log}\n{current_model_log}\n{best_model_log}'
-                print(loss_model_log)
-                log.write(loss_model_log + '\n')
-
-                # show some predicted results
-                dashed_line = '-' * 80
-                head = f'{"Ground Truth":25s} | {"Prediction":25s} | Confidence Score & T/F'
-                predicted_result_log = f'{dashed_line}\n{head}\n{dashed_line}\n'
-                for gt, pred, confidence in zip(labels[:5], preds[:5], confidence_score[:5]):
-                    if 'Attn' in opt.Prediction:
-                        gt = gt[:gt.find('[s]')]
-                        pred = pred[:pred.find('[s]')]
-
-                    predicted_result_log += f'{gt:25s} | {pred:25s} | {confidence:0.4f}\t{str(pred == gt)}\n'
-                predicted_result_log += f'{dashed_line}'
-                print(predicted_result_log)
-                log.write(predicted_result_log + '\n')
-
-        # save model per 1e+5 iter.
-        if (i + 1) % 1e+5 == 0:
-            torch.save(
-                model.state_dict(), f'./saved_models/{opt.experiment_name}/iter_{i+1}.pth')
-
-        if i == opt.num_iter:
-            print('end the training')
-            sys.exit()
-        i += 1
 
 
 if __name__ == '__main__':

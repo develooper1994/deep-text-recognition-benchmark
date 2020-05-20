@@ -11,9 +11,9 @@ import torch.nn.functional as F
 import numpy as np
 from nltk.metrics.distance import edit_distance
 
-from utils import CTCLabelConverter, AttnLabelConverter, Averager
+from utils import CTCLabelConverter, AttnLabelConverter, Averager, model_configuration
 from dataset import hierarchical_dataset, AlignCollate
-from model import Model
+# from model import Model
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 
@@ -179,23 +179,7 @@ def validation(model, criterion, evaluation_loader, converter, opt):
 
 def test(opt):
     """ model configuration """
-    if 'CTC' in opt.Prediction:
-        converter = CTCLabelConverter(opt.character)
-    else:
-        converter = AttnLabelConverter(opt.character)
-    opt.num_class = len(converter.character)
-
-    if opt.rgb:
-        opt.input_channel = 3
-    model = Model(opt)
-    print('model input parameters', opt.imgH, opt.imgW, opt.num_fiducial, opt.input_channel, opt.output_channel,
-          opt.hidden_size, opt.num_class, opt.batch_max_length, opt.Transformation, opt.FeatureExtraction,
-          opt.SequenceModeling, opt.Prediction)
-    model = torch.nn.DataParallel(model).to(device)
-
-    # load model
-    print('loading pretrained model from %s' % opt.saved_model)
-    model.load_state_dict(torch.load(opt.saved_model, map_location=device))
+    converter, model = model_configuration(opt)
     opt.experiment_name = '_'.join(opt.saved_model.split('/')[1:])
     # print(model)
 
