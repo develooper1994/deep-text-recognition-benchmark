@@ -1,6 +1,15 @@
+import os
+from collections import OrderedDict
+from pathlib import Path
+
 import torch
 
-from model import Model
+from .. import file_utils
+
+try:
+    from model import Model
+except:
+    from .model import Model
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
@@ -123,7 +132,7 @@ class Averager(object):
         return res
 
 
-def model_configuration(opt):
+def model_configuration(opt, model_path=None, model_url=None):
     if 'CTC' in opt.Prediction:
         converter = CTCLabelConverter(opt.character)
     else:
@@ -135,8 +144,98 @@ def model_configuration(opt):
     print('model input parameters', opt.imgH, opt.imgW, opt.num_fiducial, opt.input_channel, opt.output_channel,
           opt.hidden_size, opt.num_class, opt.batch_max_length, opt.Transformation, opt.FeatureExtraction,
           opt.SequenceModeling, opt.Prediction)
-    model = torch.nn.DataParallel(model).to(device)
+    # model = torch.nn.DataParallel(model).to(device)
     # load model
-    print('loading pretrained model from %s' % opt.saved_model)
-    model.load_state_dict(torch.load(opt.saved_model, map_location=device))  # error!
+
+    if model_path is None:
+        model_path = opt.image_folder
+    net_name = opt.saved_model
+    print('loading pretrained model from %s' % net_name)
+    if model_url is None:
+        models_urls = {
+            'None-ResNet-None-CTC.pth': 'https://drive.google.com/open?id=1FocnxQzFBIjDT2F9BkNUiLdo1cC3eaO0',
+            'None-VGG-BiLSTM-CTC.pth': 'https://drive.google.com/open?id=1GGC2IRYEMQviZhqQpbtpeTgHO_IXWetG',
+            'None-VGG-None-CTC.pth': 'https://drive.google.com/open?id=1FS3aZevvLiGF1PFBm5SkwvVcgI6hJWL9',
+            'TPS-ResNet-BiLSTM-Attn-case-sensitive.pth': 'https://drive.google.com/open?id=1ajONZOgiG9pEYsQ-eBmgkVbMDuHgPCaY',
+            'TPS-ResNet-BiLSTM-Attn.pth': 'https://drive.google.com/open?id=1b59rXuGGmKne1AuHnkgDzoYgKeETNMv9',
+            'TPS-ResNet-BiLSTM-CTC.pth': 'https://drive.google.com/open?id=1FocnxQzFBIjDT2F9BkNUiLdo1cC3eaO0',
+        }
+        model_url = models_urls[net_name]
+    model_path = get_weight_path(model_path=model_path, model_url=model_url, net_name=net_name)
+    # model.load_state_dict(copyStateDict(net_name, map_location=device))  # error!
+    try:
+        model = __load_state_dict(model, net_name)
+        # model.load_state_dict(copyStateDict(torch.load(net_name, map_location=device)))  # error!
+    except:
+        model = __load_state_dict(model, model_path + net_name)
+        # model.load_state_dict(copyStateDict(torch.load(model_path + net_name, map_location=device)))  # error!
     return converter, model
+
+
+def get_weight_path(model_path=None, model_url=None, net_name: str = "/TPS-ResNet-BiLSTM-Attn.pth"):
+    """
+    Downloads weights and biases if model_path is empty.
+        Default download path:
+            Linux: $HOME/.craft_text_detector/weights
+            Windows: $HOME/.craft_text_detector/weights
+    :param model_path: Serialized network(model) file
+    :param model_url: network(model) url
+    :param net_name: network(model) file name
+    :type net_name: str
+    :return: weight path
+        if model_path is None:
+            weight_path = "$HOME/.craft_text_detector/weights"
+    """
+    home_path = str(Path.home())
+    if model_path is None:
+        weight_path = os.path.join(
+            home_path, ".handwritten_recognition", "weights", net_name
+        )
+    else:
+        weight_path = model_path
+
+    # check if weights are already downloaded. if not, download
+    if os.path.isfile(weight_path) is not True:
+        # download to given weight_path
+        print("Craft text detector weight will be downloaded to {}".format(weight_path))
+        file_utils.download(url=model_url, save_path=weight_path)
+    else:
+        weight_path = model_path
+    return weight_path
+
+
+def copyStateDict(state_dict):
+    """
+    Copies network(model) deserialized weights and biases.
+    :param state_dict: Deserialized weights and biases
+    :return: New deserialized weights and biases
+    """
+    if list(state_dict.keys())[0].startswith("module"):
+        start_idx = 1
+    else:
+        start_idx = 0
+    new_state_dict = OrderedDict()
+    for k, v in state_dict.items():
+        name = ".".join(k.split(".")[start_idx:])
+        new_state_dict[name] = v
+    return new_state_dict
+
+
+def __load_state_dict(net, weight_path, device="cpu"):
+    """
+    1) Loads weights and biases.
+    2) Deserialize them.
+    3) Transport to cuda
+    4) Make it pytorch "dataparallel"
+    5) Turn it into evaluation mode.
+    6) Return it.
+    :param net: Artificial Neural network(model) that makes main job
+    :param weight_path: Serialized pth file path with name
+    :return: loaded network
+    """
+    net.load_state_dict(copyStateDict(torch.load(weight_path)))
+
+    net = net.to(device)
+    net = torch.nn.DataParallel(net)
+    net.eval()
+    return net

@@ -1,17 +1,17 @@
-import os
-import sys
-import re
-import six
 import math
-import lmdb
-import torch
+import os
+import re
+import sys
 
-from natsort import natsorted
-from PIL import Image
+import lmdb
 import numpy as np
-from torch.utils.data import Dataset, ConcatDataset, Subset
-from torch._utils import _accumulate
+import six
+import torch
 import torchvision.transforms as transforms
+from PIL import Image
+from natsort import natsorted
+from torch._utils import _accumulate
+from torch.utils.data import Dataset, ConcatDataset, Subset
 
 
 class Batch_Balanced_Dataset(object):
@@ -27,7 +27,8 @@ class Batch_Balanced_Dataset(object):
         print(dashed_line)
         log.write(dashed_line + '\n')
         print(f'dataset_root: {opt.train_data}\nopt.select_data: {opt.select_data}\nopt.batch_ratio: {opt.batch_ratio}')
-        log.write(f'dataset_root: {opt.train_data}\nopt.select_data: {opt.select_data}\nopt.batch_ratio: {opt.batch_ratio}\n')
+        log.write(
+            f'dataset_root: {opt.train_data}\nopt.select_data: {opt.select_data}\nopt.batch_ratio: {opt.batch_ratio}\n')
         assert len(opt.select_data) == len(opt.batch_ratio)
 
         _AlignCollate = AlignCollate(imgH=opt.imgH, imgW=opt.imgW, keep_ratio_with_pad=opt.PAD)
@@ -106,7 +107,7 @@ def hierarchical_dataset(root, opt, select_data='/'):
     dataset_log = f'dataset_root:    {root}\t dataset: {select_data[0]}'
     print(dataset_log)
     dataset_log += '\n'
-    for dirpath, dirnames, filenames in os.walk(root+'/'):
+    for dirpath, dirnames, filenames in os.walk(root + '/'):
         if not dirnames:
             select_flag = False
             for selected_d in select_data:
@@ -213,25 +214,37 @@ class LmdbDataset(Dataset):
 
 
 class RawDataset(Dataset):
-
     def __init__(self, root, opt):
         self.opt = opt
         self.image_path_list = []
-        for dirpath, dirnames, filenames in os.walk(root):
-            for name in filenames:
-                _, ext = os.path.splitext(name)
-                ext = ext.lower()
-                if ext == '.jpg' or ext == '.jpeg' or ext == '.png':
-                    self.image_path_list.append(os.path.join(dirpath, name))
+        if isinstance(root, str):
+            # assume root is a image folder path
+            for dirpath, dirnames, filenames in os.walk(root):
+                for name in filenames:
+                    _, ext = os.path.splitext(name)
+                    ext = ext.lower()
+                    if ext == '.jpg' or ext == '.jpeg' or ext == '.png':
+                        self.image_path_list.append(os.path.join(dirpath, name))
+            self.image_path_list = natsorted(self.image_path_list)
+            self.nSamples = len(self.image_path_list)
+            self.all_samples = self.get_all()
+        elif isinstance(root, np.ndarray):
+            # TODO assume root has a already loaded image in numpy.array format.
+            raise NotImplementedError
+            image_vector_shape = root.shape
+            self.nSamples = image_vector_shape[0]  # batch
 
-        self.image_path_list = natsorted(self.image_path_list)
-        self.nSamples = len(self.image_path_list)
+
 
     def __len__(self):
         return self.nSamples
 
     def __getitem__(self, index):
 
+        # return self.get_one(index)
+        return self.all_samples[index]
+
+    def get_one(self, index):
         try:
             if self.opt.rgb:
                 img = Image.open(self.image_path_list[index]).convert('RGB')  # for color image
@@ -245,8 +258,14 @@ class RawDataset(Dataset):
                 img = Image.new('RGB', (self.opt.imgW, self.opt.imgH))
             else:
                 img = Image.new('L', (self.opt.imgW, self.opt.imgH))
-
         return (img, self.image_path_list[index])
+
+    def get_all(self):
+        all_samples = []
+        for index in range(self.nSamples):
+            img, self.image_path_list[index] = self.get_one(index)
+            all_samples.append([img, self.image_path_list[index]])
+        return all_samples
 
 
 class ResizeNormalize(object):

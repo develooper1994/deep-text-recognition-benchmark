@@ -1,21 +1,24 @@
+import argparse
 import os
-import sys
-import time
 import random
 import string
-import argparse
+import sys
+import time
 
+import numpy as np
 import torch
 import torch.backends.cudnn as cudnn
 import torch.nn.init as init
 import torch.optim as optim
 import torch.utils.data
-import numpy as np
 
-from utils import CTCLabelConverter, AttnLabelConverter, Averager, model_configuration
-from dataset import hierarchical_dataset, AlignCollate, Batch_Balanced_Dataset
-from model import Model
-from test import validation
+try:
+    from test import validation
+    from dataset import hierarchical_dataset, AlignCollate, Batch_Balanced_Dataset
+    from utils import Averager, model_configuration
+except:
+    from .dataset import hierarchical_dataset, AlignCollate, Batch_Balanced_Dataset
+    from .utils import Averager, model_configuration
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 

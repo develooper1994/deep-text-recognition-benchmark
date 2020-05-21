@@ -1,18 +1,23 @@
-import os
-import time
-import string
 import argparse
+import os
 import re
+import string
+import time
 
+import numpy as np
 import torch
 import torch.backends.cudnn as cudnn
-import torch.utils.data
 import torch.nn.functional as F
-import numpy as np
+import torch.utils.data
 from nltk.metrics.distance import edit_distance
 
-from utils import CTCLabelConverter, AttnLabelConverter, Averager, model_configuration
-from dataset import hierarchical_dataset, AlignCollate
+try:
+    from dataset import hierarchical_dataset, AlignCollate
+    from utils import Averager, model_configuration
+except:
+    from .dataset import hierarchical_dataset, AlignCollate
+    from .utils import Averager, model_configuration
+
 # from model import Model
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 

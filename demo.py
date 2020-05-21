@@ -1,20 +1,30 @@
-import string
 import argparse
+import string
 
 import torch
 import torch.backends.cudnn as cudnn
-import torch.utils.data
 import torch.nn.functional as F
+import torch.utils.data
+try:
+    from dataset import RawDataset, AlignCollate
+    from utils import model_configuration
+except:
+    from .dataset import RawDataset, AlignCollate
+    from .utils import model_configuration
 
-from utils import CTCLabelConverter, AttnLabelConverter, model_configuration
-from dataset import RawDataset, AlignCollate
 # from model import Model
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 
-def demo(opt):
+def demo(opts):
     """ model configuration """
+    if isinstance(opts, dict):
+        opt = argparse.Namespace(**opts)
+    elif isinstance(opts, argparse.Namespace):
+        opt = opts
+    else:
+        raise TypeError("Only dict and argparse.Namespace are allowed")
     converter, model = model_configuration(opt)
 
     # prepare data. two demo images from https://github.com/bgshih/crnn#run-demo
@@ -30,7 +40,7 @@ def demo(opt):
     predict_all(converter, demo_loader, model, opt)
 
 
-def predict_all(converter, demo_loader, model, opt):
+def predict_all(converter, demo_loader, model, opt, logging=True):
     model.eval()
     with torch.no_grad():
         for image_tensors, image_path_list in demo_loader:
@@ -38,7 +48,8 @@ def predict_all(converter, demo_loader, model, opt):
             preds_prob = F.softmax(preds, dim=2)
             preds_max_prob, _ = preds_prob.max(dim=2)
 
-            logging_prediction(image_path_list, opt, preds_max_prob, preds_str)
+            if logging:
+                logging_prediction(image_path_list, preds_max_prob, preds_str, opt)
 
 
 def predict_one(converter, image_tensors, model, opt):
@@ -65,7 +76,7 @@ def predict_one(converter, image_tensors, model, opt):
     return preds, preds_str
 
 
-def logging_prediction(image_path_list, opt, preds_max_prob, preds_str):
+def logging_prediction(image_path_list, preds_max_prob, preds_str, opt):
     log = open(f'./log_demo_result.txt', 'a')
     dashed_line = '-' * 80
     head = f'{"image_path":25s}\t{"predicted_labels":25s}\tconfidence score'
@@ -87,30 +98,50 @@ def logging_prediction(image_path_list, opt, preds_max_prob, preds_str):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('--image_folder', required=True, help='path to image_folder which contains text images')
-    parser.add_argument('--workers', type=int, help='number of data loading workers', default=4)
-    parser.add_argument('--batch_size', type=int, default=192, help='input batch size')
-    parser.add_argument('--saved_model', required=True, help="path to saved_model to evaluation")
+    parser.add_argument('--image_folder', type=str, required=True, default='demo_image/',
+                        help='path to image_folder which contains text images')
+    parser.add_argument('--workers', type=int, default=4,
+                        help='number of data loading workers')
+    parser.add_argument('--batch_size', type=int, default=192,
+                        help='input batch size')
+    parser.add_argument('--saved_model', type=str, required=True, default='TPS-ResNet-BiLSTM-Attn.pth',
+                        help="path to saved_model to evaluation")
     """ Data processing """
-    parser.add_argument('--batch_max_length', type=int, default=25, help='maximum-label-length')
-    parser.add_argument('--imgH', type=int, default=32, help='the height of the input image')
-    parser.add_argument('--imgW', type=int, default=100, help='the width of the input image')
-    parser.add_argument('--rgb', action='store_true', help='use rgb input')
-    parser.add_argument('--character', type=str, default='0123456789abcdefghijklmnopqrstuvwxyz', help='character label')
-    parser.add_argument('--sensitive', action='store_true', help='for sensitive character mode')
-    parser.add_argument('--PAD', action='store_true', help='whether to keep ratio then pad for image resize')
+    parser.add_argument('--batch_max_length', type=int, default=25,
+                        help='maximum-label-length')
+    parser.add_argument('--imgH', type=int, default=32,
+                        help='the height of the input image')
+    parser.add_argument('--imgW', type=int, default=100,
+                        help='the width of the input image')
+    parser.add_argument('--rgb', action='store_true', default=False,
+                        help='use rgb input')
+    parser.add_argument('--character', type=str, default='0123456789abcdefghijklmnopqrstuvwxyz',
+                        help='character label')
+    parser.add_argument('--sensitive', action='store_true', default=False,
+                        help='for sensitive character mode')
+    parser.add_argument('--PAD', action='store_true', default=False,
+                        help='whether to keep ratio then pad for image resize')
     """ Model Architecture """
-    parser.add_argument('--Transformation', type=str, required=True, help='Transformation stage. None|TPS')
-    parser.add_argument('--FeatureExtraction', type=str, required=True, help='FeatureExtraction stage. VGG|RCNN|ResNet')
-    parser.add_argument('--SequenceModeling', type=str, required=True, help='SequenceModeling stage. None|BiLSTM')
-    parser.add_argument('--Prediction', type=str, required=True, help='Prediction stage. CTC|Attn')
-    parser.add_argument('--num_fiducial', type=int, default=20, help='number of fiducial points of TPS-STN')
-    parser.add_argument('--input_channel', type=int, default=1, help='the number of input channel of Feature extractor')
+    parser.add_argument('--Transformation', type=str, required=True, default='TPS',
+                        help='Transformation stage. None|TPS')
+    parser.add_argument('--FeatureExtraction', type=str, required=True, default='ResNet',
+                        help='FeatureExtraction stage. VGG|RCNN|ResNet')
+    parser.add_argument('--SequenceModeling', type=str, required=True, default='BiLSTM',
+                        help='SequenceModeling stage. None|BiLSTM')
+    parser.add_argument('--Prediction', type=str, required=True, default="Attn",
+                        help='Prediction stage. CTC|Attn')
+    parser.add_argument('--num_fiducial', type=int, default=20,
+                        help='number of fiducial points of TPS-STN')
+    parser.add_argument('--input_channel', type=int, default=1,
+                        help='the number of input channel of Feature extractor')
     parser.add_argument('--output_channel', type=int, default=512,
                         help='the number of output channel of Feature extractor')
-    parser.add_argument('--hidden_size', type=int, default=256, help='the size of the LSTM hidden state')
+    parser.add_argument('--hidden_size', type=int, default=256,
+                        help='the size of the LSTM hidden state')
 
     opt = parser.parse_args()
+    print(opt)
+    print(type(opt))
 
     """ vocab / character number configuration """
     if opt.sensitive:
@@ -120,4 +151,25 @@ if __name__ == '__main__':
     cudnn.deterministic = True
     opt.num_gpu = torch.cuda.device_count()
 
-    demo(opt)
+    all_opt = dict(FeatureExtraction='ResNet',
+                   PAD=False,
+                   Prediction='Attn',
+                   SequenceModeling='BiLSTM',
+                   Transformation='TPS',
+                   batch_max_length=25,
+                   batch_size=192,
+                   character='0123456789abcdefghijklmnopqrstuvwxyz',
+                   hidden_size=256,
+                   image_folder='demo_image/',
+                   imgH=32,
+                   imgW=100,
+                   input_channel=1,
+                   num_fiducial=20,
+                   output_channel=512,
+                   rgb=False,
+                   saved_model='TPS-ResNet-BiLSTM-Attn.pth',
+                   sensitive=False,
+                   workers=4)
+
+    # demo(opt)
+    demo(all_opt)
