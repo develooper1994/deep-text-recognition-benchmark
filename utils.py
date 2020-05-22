@@ -5,6 +5,7 @@ from pathlib import Path
 import torch
 
 from .. import file_utils
+import warnings
 
 try:
     from model import Model
@@ -132,7 +133,7 @@ class Averager(object):
         return res
 
 
-def model_configuration(opt, model_path=None, model_url=None):
+def model_configuration(opt, model_path=None, model_url=None, download=False):
     if 'CTC' in opt.Prediction:
         converter = CTCLabelConverter(opt.character)
     else:
@@ -148,31 +149,48 @@ def model_configuration(opt, model_path=None, model_url=None):
     # load model
 
     if model_path is None:
+        warnings.warn("models should be same directory as the image directory")
         model_path = opt.image_folder
     net_name = opt.saved_model
     print('loading pretrained model from %s' % net_name)
     if model_url is None:
         models_urls = {
-            'None-ResNet-None-CTC.pth': 'https://drive.google.com/open?id=1FocnxQzFBIjDT2F9BkNUiLdo1cC3eaO0',
-            'None-VGG-BiLSTM-CTC.pth': 'https://drive.google.com/open?id=1GGC2IRYEMQviZhqQpbtpeTgHO_IXWetG',
-            'None-VGG-None-CTC.pth': 'https://drive.google.com/open?id=1FS3aZevvLiGF1PFBm5SkwvVcgI6hJWL9',
-            'TPS-ResNet-BiLSTM-Attn-case-sensitive.pth': 'https://drive.google.com/open?id=1ajONZOgiG9pEYsQ-eBmgkVbMDuHgPCaY',
-            'TPS-ResNet-BiLSTM-Attn.pth': 'https://drive.google.com/open?id=1b59rXuGGmKne1AuHnkgDzoYgKeETNMv9',
-            'TPS-ResNet-BiLSTM-CTC.pth': 'https://drive.google.com/open?id=1FocnxQzFBIjDT2F9BkNUiLdo1cC3eaO0',
+            'None-ResNet-None-CTC.pth': 'https://drive.google.com/file/d/1WF5XJvReLQ4DyYTbrvFzZ7zc-nFc7VGI/view?usp=sharing',
+            'None-VGG-BiLSTM-CTC.pth': 'https://drive.google.com/file/d/1UcnA5eqGTj4Wq2lFp-qKOrjIbcJ0tVuP/view?usp=sharing',
+            'None-VGG-None-CTC.pth': 'https://drive.google.com/file/d/1bbom7pjB37X-TqparKO4U-4cTfq01kC0/view?usp=sharing',
+            'TPS-ResNet-BiLSTM-Attn-case-sensitive.pth': 'https://drive.google.com/file/d/10XlPutQuvhGR1tPgYwNAxiHNd1AvpbA9/view?usp=sharing',
+            'TPS-ResNet-BiLSTM-Attn.pth': 'https://drive.google.com/file/d/1m4jUiTLFDkOhYA3ErPiPK9TGgUG_xQxz/view?usp=sharing',
+            'TPS-ResNet-BiLSTM-CTC.pth': 'https://drive.google.com/file/d/1kZubKJij7hN4rERNnSd2R5e8Yfo9pinq/view?usp=sharing',
         }
         model_url = models_urls[net_name]
-    model_path = get_weight_path(model_path=model_path, model_url=model_url, net_name=net_name)
+    if download:
+        raise NotImplementedError  #  not working correctly.
+        # TODO! implement with pycurl to download big models. like... demo.ipynb
+        # models = {
+        # 'None-ResNet-None-CTC.pth': 'https://drive.google.com/open?id=1FocnxQzFBIjDT2F9BkNUiLdo1cC3eaO0',
+        # 'None-VGG-BiLSTM-CTC.pth': 'https://drive.google.com/open?id=1GGC2IRYEMQviZhqQpbtpeTgHO_IXWetG',
+        # 'None-VGG-None-CTC.pth': 'https://drive.google.com/open?id=1FS3aZevvLiGF1PFBm5SkwvVcgI6hJWL9',
+        # 'TPS-ResNet-BiLSTM-Attn-case-sensitive.pth': 'https://drive.google.com/open?id=1ajONZOgiG9pEYsQ-eBmgkVbMDuHgPCaY',
+        # 'TPS-ResNet-BiLSTM-Attn.pth': 'https://drive.google.com/open?id=1b59rXuGGmKne1AuHnkgDzoYgKeETNMv9',
+        # 'TPS-ResNet-BiLSTM-CTC.pth': 'https://drive.google.com/open?id=1FocnxQzFBIjDT2F9BkNUiLdo1cC3eaO0',
+        # }
+        #
+        # for k, v in models.items():
+        # doc_id = v[v.find('=')+1:]
+        # !curl -c /tmp/cookies "https://drive.google.com/uc?export=download&id=$doc_id" > /tmp/intermezzo.html
+        # !curl -L -b /tmp/cookies "https://drive.google.com$(cat /tmp/intermezzo.html | grep -Po 'uc-download-link" [^>]* href="\K[^"]*' | sed 's/\&amp;/\&/g')" > $k
+        #
+        # !ls -al *.pth
+        model_path = get_weights(model_path=model_path, model_url=model_url, net_name=net_name)
     # model.load_state_dict(copyStateDict(net_name, map_location=device))  # error!
     try:
-        model = __load_state_dict(model, net_name)
-        # model.load_state_dict(copyStateDict(torch.load(net_name, map_location=device)))  # error!
+        model = __load_state_dict(model, model_path + "/" + net_name)
     except:
-        model = __load_state_dict(model, model_path + net_name)
-        # model.load_state_dict(copyStateDict(torch.load(model_path + net_name, map_location=device)))  # error!
+        model = __load_state_dict(model, net_name)
     return converter, model
 
 
-def get_weight_path(model_path=None, model_url=None, net_name: str = "/TPS-ResNet-BiLSTM-Attn.pth"):
+def get_weights(model_path=None, model_url=None, net_name: str = "/TPS-ResNet-BiLSTM-Attn.pth"):
     """
     Downloads weights and biases if model_path is empty.
         Default download path:
@@ -198,7 +216,8 @@ def get_weight_path(model_path=None, model_url=None, net_name: str = "/TPS-ResNe
     if os.path.isfile(weight_path) is not True:
         # download to given weight_path
         print("Craft text detector weight will be downloaded to {}".format(weight_path))
-        file_utils.download(url=model_url, save_path=weight_path)
+        file_utils.download(url=model_url, save_path=weight_path)  # TODO! gdown can't download large pretranied models. Use curl
+        # file_utils.download_model_from_google_drive(url=model_url, save_path=model_path+"/"+net_name)  # TODO! gdown can't download large pretranied models. Use curl
     else:
         weight_path = model_path
     return weight_path

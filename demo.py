@@ -53,7 +53,10 @@ def predict_all(converter, demo_loader, model, opt, logging=True):
 
 
 def predict_one(converter, image_tensors, model, opt):
-    batch_size = image_tensors.size(0)
+    try:
+        batch_size = image_tensors.size(0)
+    except:
+        batch_size = 1
     image = image_tensors.to(device)
     # For max length prediction
     length_for_pred = torch.IntTensor([opt.batch_max_length] * batch_size).to(device)
