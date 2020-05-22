@@ -5,14 +5,25 @@ import torch
 import torch.backends.cudnn as cudnn
 import torch.nn.functional as F
 import torch.utils.data
-try:
-    from dataset import RawDataset, AlignCollate
-    from utils import model_configuration
-except:
-    from .dataset import RawDataset, AlignCollate
-    from .utils import model_configuration
 
-# from model import Model
+try:
+    from recognition.deep_text_recognition.dataset import RawDataset, AlignCollate
+    from recognition.deep_text_recognition.utils import model_configuration
+except:
+    try:
+        from dataset import RawDataset, AlignCollate
+        from utils import model_configuration
+    except:
+        try:
+            from deep_text_recognition.dataset import RawDataset, AlignCollate
+            from deep_text_recognition.utils import model_configuration
+        except:
+            from .dataset import RawDataset, AlignCollate
+            from .utils import model_configuration
+
+# # from model import Model
+# from dataset import AlignCollate, RawDataset
+# from utils import model_configuration
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
@@ -163,7 +174,7 @@ if __name__ == '__main__':
                    batch_size=192,
                    character='0123456789abcdefghijklmnopqrstuvwxyz',
                    hidden_size=256,
-                   image_folder='demo_image/',
+                   image_folder='/home/selcuk/Desktop/IAM8/a1',
                    imgH=32,
                    imgW=100,
                    input_channel=1,

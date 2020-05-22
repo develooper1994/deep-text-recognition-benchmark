@@ -1,16 +1,19 @@
 import os
 from collections import OrderedDict
 from pathlib import Path
+import warnings
 
 import torch
 
-from .. import file_utils
-import warnings
+# from detection.craft_text_detector.craft_text_detector import file_utils
 
 try:
     from model import Model
 except:
-    from .model import Model
+    try:
+        from .model import Model
+    except:
+        from recognition.deep_text_recognition.model import Model
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
@@ -216,7 +219,7 @@ def get_weights(model_path=None, model_url=None, net_name: str = "/TPS-ResNet-Bi
     if os.path.isfile(weight_path) is not True:
         # download to given weight_path
         print("Craft text detector weight will be downloaded to {}".format(weight_path))
-        file_utils.download(url=model_url, save_path=weight_path)  # TODO! gdown can't download large pretranied models. Use curl
+        # file_utils.download(url=model_url, save_path=weight_path)  # TODO! gdown can't download large pretranied models. Use curl
         # file_utils.download_model_from_google_drive(url=model_url, save_path=model_path+"/"+net_name)  # TODO! gdown can't download large pretranied models. Use curl
     else:
         weight_path = model_path
