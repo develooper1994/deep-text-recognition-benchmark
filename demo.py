@@ -174,7 +174,7 @@ if __name__ == '__main__':
                    batch_size=192,
                    character='0123456789abcdefghijklmnopqrstuvwxyz',
                    hidden_size=256,
-                   image_folder='/home/selcuk/Desktop/IAM8/a1',
+                   image_folder='/home/selcuk/Desktop/plates/plate6_crops/',
                    imgH=32,
                    imgW=100,
                    input_channel=1,
