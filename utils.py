@@ -13,7 +13,7 @@ except:
     try:
         from .model import Model
     except:
-        from recognition.deep_text_recognition.model import Model
+        from recognition.minimal_text_recognition.model import Model
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 

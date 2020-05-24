@@ -7,8 +7,8 @@ import torch.nn.functional as F
 import torch.utils.data
 
 try:
-    from recognition.deep_text_recognition.dataset import RawDataset, AlignCollate
-    from recognition.deep_text_recognition.utils import model_configuration
+    from recognition.minimal_text_recognition.dataset import RawDataset, AlignCollate
+    from recognition.minimal_text_recognition.utils import model_configuration
 except:
     try:
         from dataset import RawDataset, AlignCollate
