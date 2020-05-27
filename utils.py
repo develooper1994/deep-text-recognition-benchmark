@@ -1,7 +1,7 @@
 import os
+import warnings
 from collections import OrderedDict
 from pathlib import Path
-import warnings
 
 import torch
 
